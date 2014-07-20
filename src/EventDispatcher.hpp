@@ -29,84 +29,120 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace ED
 {
-	template<typename _SequenceType>
-	class EventDispatcher : public std::enable_shared_from_this<_SequenceType> {
+class Manager;
 
-	private:
+typedef detail::ISubscritpion ISubscritpion;
+typedef std::unique_ptr<ISubscritpion> subscription_t;
 
-		detail::EventDispatcher eventDispatcher;
 
-	protected:
+class EventSubscriptionManager
+{
+    friend class Manager;
+    detail::EventDispatcher &eventDispatcher;
 
-		template<typename _EventType>
-		void RaiseEvent( const _EventType & event ) {
+    EventSubscriptionManager(detail::EventDispatcher &eventDispatcher)
+        :	eventDispatcher(eventDispatcher)
+    {}
 
-			eventDispatcher.Raise( event );
-		}
+public:
 
-	public:
+    ////////////////////////////////////// SUBSCRIBE TO EVENTS MEETING A GIVEN CONDITION //////////////////////////////////
+    // Foe example, subscribe to all integer events with an even value
+    template<typename _EventType, typename _Handler, typename _Condition>
+    std::unique_ptr<ISubscritpion>
+    SubscribeConditionalEventHandler( const _Handler & handler, const _Condition & condition ) {
 
-		template<typename _EventType, typename _Handler, typename _Condition>
-		std::shared_ptr<_SequenceType>
-		RegisterConditionalEventHandler( const _Handler & handler, const _Condition & condition ) {
+        return eventDispatcher.Register<_EventType>( handler, condition );
+    }
 
-			eventDispatcher.Register<_EventType>( handler, condition );
+    template<typename _EventType, typename _Thiz, typename _MFunc, typename _Condition>
+    std::unique_ptr<ISubscritpion>
+    SubscribeConditionalEventHandler( const _Thiz & thiz, const _MFunc & memb, const _Condition & condition ) {
 
-			return this->shared_from_this();
-		}
+        return SubscribeConditionalEventHandler<_EventType>(
+            std::bind( memb, thiz, std::placeholders::_1 ),
+            condition);
+    }
 
-		template<typename _EventType, typename _Thiz, typename _MFunc, typename _Condition>
-		std::shared_ptr<_SequenceType>
-		RegisterConditionalEventHandler( const _Thiz & thiz, const _MFunc & memb, const _Condition & condition ) {
+    template<typename _EventType, typename _Thiz, typename _MFunc, typename _CThiz, typename _CMFunc >
+    std::unique_ptr<ISubscritpion>
+    SubscribeConditionalEventHandler( const _Thiz & thiz, const _MFunc & memb, const _CThiz & cthiz, const _CMFunc & cmemb ) {
 
-			return RegisterConditionalEventHandler<_EventType>(
-					std::bind( memb, thiz, std::placeholders::_1 ),
-					condition);
-		}
+        return SubscribeConditionalEventHandler<_EventType>(
+            std::bind(  memb,  thiz, std::placeholders::_1 ),
+            std::bind( cmemb, cthiz, std::placeholders::_1 ));
+    }
+    
+    ////////////////////////////////////////// SUBSCRIBE TO EVENTS BY TYPE ////////////////////////////////////////////////
+    // For example, Subscribe to integer events.
+    template<typename _EventType, typename _Handler>
+    std::unique_ptr<ISubscritpion>
+    SubscribeEventTypeHandler( const _Handler & handler ) {
 
-		template<typename _EventType, typename _Thiz, typename _MFunc, typename _CThiz, typename _CMFunc >
-		std::shared_ptr<_SequenceType>
-		RegisterConditionalEventHandler( const _Thiz & thiz, const _MFunc & memb, const _CThiz & cthiz, const _CMFunc & cmemb ) {
+        return eventDispatcher.Register<_EventType>( handler );
+    }
 
-			return RegisterConditionalEventHandler<_EventType>(
-					std::bind(  memb,  thiz, std::placeholders::_1 ),
-					std::bind( cmemb, cthiz, std::placeholders::_1 ));
-		}
+    template<typename _EventType, typename _Thiz, typename _MFunc>
+    std::unique_ptr<ISubscritpion>
+    SubscribeEventTypeHandler( const _Thiz & thiz, const _MFunc & memb ) {
 
-		template<typename _EventType, typename _Handler>
-		std::shared_ptr<_SequenceType>
-		RegisterEventTypeHandler( const _Handler & handler ) {
+        return SubscribeEventTypeHandler<_EventType>(
+            std::bind( memb, thiz, std::placeholders::_1 ) );
+    }
 
-			eventDispatcher.Register<_EventType>( handler );
 
-			return this->shared_from_this();
-		}
+    ////////////////////////////////////////// SUBSCRIBE TO EVENTS BY TYPE VALUE ////////////////////////////////////////////
+    // For example, Subscribe to integer events with value 101;
+    template<typename _EventType, typename _Handler>
+    std::unique_ptr<ISubscritpion>
+    SubscribeEventHandler( const _EventType & event, const _Handler & handler ) {
 
-		template<typename _EventType, typename _Thiz, typename _MFunc>
-		std::shared_ptr<_SequenceType>
-		RegisterEventTypeHandler( const _Thiz & thiz, const _MFunc & memb ) {
+        return eventDispatcher.Register( event, handler );
+    }
 
-			return RegisterEventTypeHandler<_EventType>(
-					std::bind( memb, thiz, std::placeholders::_1 ) );
-		}
+    template<typename _EventType, typename _Thiz, typename _MFunc>
+    std::unique_ptr<ISubscritpion>
+    SubscribeEventHandler( const _EventType & event, const _Thiz & thiz, const _MFunc & memb ) {
 
-		template<typename _EventType, typename _Handler>
-		std::shared_ptr<_SequenceType>
-		RegisterEventHandler( const _EventType & event, const _Handler & handler ) {
+        return SubscribeEventHandler(
+            event,
+            std::bind( memb, thiz, std::placeholders::_1 ) );
+    }
+};
 
-			eventDispatcher.Register( event, handler );
+class EventPublicationManager  {
 
-			return this->shared_from_this();
-		}
+    friend class Manager;
 
-		template<typename _EventType, typename _Thiz, typename _MFunc>
-		std::shared_ptr<_SequenceType>
-		RegisterEventHandler( const _EventType & event, const _Thiz & thiz, const _MFunc & memb ) {
+    detail::EventDispatcher &eventDispatcher;
 
-			return RegisterEventHandler(
-					event,
-					std::bind( memb, thiz, std::placeholders::_1 ) );
-		}
-	};
+    EventPublicationManager(detail::EventDispatcher &eventDispatcher)
+        :	eventDispatcher(eventDispatcher)
+    {}
+
+public:
+
+    template<typename _EventType>
+    void PublishEvent( const _EventType & event ) {
+
+        eventDispatcher.Raise( event );
+    }
+};
+
+class Manager
+{
+    detail::EventDispatcher eventDispatcher;
+
+public:
+    EventSubscriptionManager SubscriptionInterface()
+    {
+        return EventSubscriptionManager(eventDispatcher);
+    }
+
+    EventPublicationManager PublicationInterface()
+    {
+        return EventPublicationManager(eventDispatcher);
+    }
+};
 }
 

@@ -23,6 +23,7 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/* TODO: Are stale references possible in ISubscritpion implementations??? */
 
 #pragma once
 
@@ -31,6 +32,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <map>
 #include <vector>
 #include <functional>
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
@@ -42,6 +44,17 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 namespace ED {
 
 	namespace detail {
+	  
+		/**************************************************************************
+		 * Subscribing to an event returns an ISubscritpion.
+		 * 	Deleteing the subscription un-subscribes the event.
+		 **************************************************************************/
+		class ISubscritpion
+		{
+		public:
+		  virtual ~ISubscritpion(){}
+		};
+	  
 
 		/**************************************************************************
 		 * Internal std::shared_ptr<T> wrapper.
@@ -130,15 +143,43 @@ namespace ED {
 					}
 			}
 
+			template<typename _T>
+			class SpecificSubscription : public ISubscritpion
+			{
+			  FunctorLookup &functorLookup;
+			  const _EventType event;
+			  FunctorWrapper<_T> * functionWrapper;
+			public:
+			  SpecificSubscription(FunctorLookup &functorLookup, const _EventType & event, FunctorWrapper<_T> * functionWrapper)
+			    :	functorLookup(functorLookup),
+				event(event),
+				functionWrapper(functionWrapper)
+			  {}
+			  virtual ~SpecificSubscription() {
+			    
+			    FunctorVector & functorVector = functorLookup[event];
+			    FunctorVector::iterator itor = std::find(functorVector.begin(), functorVector.end(), functionWrapper);
+			    if( itor != functorVector.end() ) {
+			      delete (*itor);
+			      functorVector.erase( itor );
+			    }
+			  }
+			};
+
 			template<typename _Handler>
-			void Register( const _EventType &event, const _Handler & handler ) {
+			std::unique_ptr<detail::ISubscritpion> Register( const _EventType &event, const _Handler & handler ) {
 
 				typedef std::function<void(const _EventType &)> Function;
 
 				Function handler_function = handler;
+				
+				FunctorVector & functorVector = functorLookup[event];
+				
+				auto functorWrapper = new FunctorWrapper<Function>(handler_function);
 
-				functorLookup[event].push_back(
-					new FunctorWrapper<Function>(handler_function));
+				functorVector.push_back(functorWrapper);
+				
+				return std::unique_ptr<detail::ISubscritpion>( new SpecificSubscription<Function>(functorLookup, event, functorWrapper) );
 			}
 		};
 
@@ -178,9 +219,31 @@ namespace ED {
 						}
 					}
 			}
+			
+			class ConditionalSubscription : public ISubscritpion
+			{
+			  FunctorLookup & functorLookup;
+			  ConditionalFunctor 	functionWrapper;
+			  std::type_index ti;
+			public:
+			  ConditionalSubscription(FunctorLookup & functorLookup, std::type_index ti, const ConditionalFunctor & functionWrapper)
+			    :	functorLookup(functorLookup),
+				ti(ti),
+				functionWrapper(functionWrapper)
+			  {}
+			  virtual ~ConditionalSubscription() {
+			    
+			    FunctorVector & functorVector = functorLookup[ti];
+			    typename FunctorVector::iterator itor = std::find(functorVector.begin(), functorVector.end(), functionWrapper);
+			    if( itor != functorVector.end() ) {
+			      delete (*itor).second;
+			      functorVector.erase( itor );
+			    }
+			  }
+			};
 
 			template<typename _Handler, typename _Condition >
-			void Register( const _Handler & handler, const _Condition & condition ) {
+			std::unique_ptr<ISubscritpion> Register( const _Handler & handler, const _Condition & condition ) {
 
 				typedef std::function<void(const _EventType &)> Function;
 
@@ -190,8 +253,12 @@ namespace ED {
 
 				cf.first  = condition;
 				cf.second = new FunctorWrapper<Function>(handler_function);
+				
+				FunctorVector &functorVector = functorLookup[typeid(_EventType)];
 
-				functorLookup[typeid(_EventType)].push_back(cf);
+				functorVector.push_back(cf);
+				
+				return std::unique_ptr<ISubscritpion>( new ConditionalSubscription( functorVector, typeid(_EventType), cf ) );
 			}
 		};
 
@@ -250,7 +317,7 @@ namespace ED {
 			}
 
 			template<typename _EventType, typename _Handler, typename _Condition>
-			void Register( const _Handler & handler, const _Condition & condition) {
+			std::unique_ptr<detail::ISubscritpion> Register( const _Handler & handler, const _Condition & condition) {
 
 				typedef std::function<void(const _EventType &)> Function;
 				Function handler_function = handler;
@@ -262,14 +329,11 @@ namespace ED {
 						new InstWrapper<ConditionalEventHandlerLookup<_EventType>>( );
 					itor0 = conditionalMap.find( typeid(_EventType) );
 				}
-				itor0
-					->second
-					->GetInst<ConditionalEventHandlerLookup<_EventType>>()
-					.Register(handler_function, condition);
+				return itor0->second->GetInst<ConditionalEventHandlerLookup<_EventType>>().Register(handler_function, condition);
 			}
 
 			template<typename _EventType, typename _Handler>
-			void Register( const _EventType & event, const _Handler & handler ) {
+			std::unique_ptr<detail::ISubscritpion>  Register( const _EventType & event, const _Handler & handler ) {
 
 				typedef std::function<void(const _EventType &)> Function;
 				Function handler_function = handler;
@@ -281,22 +345,48 @@ namespace ED {
 						new InstWrapper<SpecificEventHandlerLookup<_EventType>>( );
 					itor0 = specificMap.find( typeid(_EventType) );
 				}
-				itor0
-					->second
-					->GetInst<SpecificEventHandlerLookup<_EventType>>()
-					.Register(event, handler_function);
+				return  itor0->second->GetInst<SpecificEventHandlerLookup<_EventType>>().Register(event, handler_function);
 			}
+			
+			template<typename _T>
+			class GeneralSubscription : public ISubscritpion
+			{
+			  GeneralMap & generalMap;
+			  FunctorWrapper<_T> * functionWrapper;
+			  std::type_index ti;
+			public:
+			  GeneralSubscription(GeneralMap & generalMap, std::type_index ti, FunctorWrapper<_T> * functionWrapper)
+			    :	generalMap(generalMap),
+				ti(ti),
+				functionWrapper(functionWrapper)
+			  {}
+			  virtual ~GeneralSubscription() {
+			    
+			    FunctorVector &functorVector = generalMap[ti];
+			    FunctorVector::iterator itor = std::find(functorVector.begin(), functorVector.end(), functionWrapper);
+			    if( itor != functorVector.end() ) {
+			      delete (*itor);
+			      functorVector.erase( itor );
+			    }
+			  }
+			};
 
 			template<typename _EventType, typename _Handler>
-			void Register( const _Handler & handler ) {
+			std::unique_ptr<detail::ISubscritpion> Register( const _Handler & handler ) {
 
 				typedef std::function<void(const _EventType &)> Function;
 
 				Function handler_function = handler;
+				
+				auto functorWrapper = new FunctorWrapper<Function>(handler_function);
+				
+				FunctorVector &functorVector = generalMap[typeid(_EventType)];
 
-				generalMap[typeid(_EventType)].push_back(
-					new FunctorWrapper<Function>(handler_function));
+				functorVector.push_back(functorWrapper);
+				
+				return std::unique_ptr<detail::ISubscritpion>( new GeneralSubscription<Function>(generalMap, typeid(_EventType), functorWrapper) );
 			}
 		};
 	}
 }
+
