@@ -1,146 +1,109 @@
-/****************************************************************************************
-Copyright (c) 2014, Chris Stones ( chris.stones_AT_gmail.com / chris.stones_AT_zoho.com
-All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
+#include "EventDispatcher/EventDispatcher.hpp"
+#include <stdio.h>
 
-1. Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
-
-/************
- *
- * Tested with GCC 4.7.3
- * compile: g++ -std=c++11 Example.cpp -o Example
- *
- * Simple c++ event mapping library.
- * Objects can throw arbitrary 'less than' comparable event types.
- * Events can be mapped to handlers by EventType, by EventType value,
- * or by an optional condition filter function / lambda.
- *
- * See main() below for a quick example.
- */
-
-#include "EventDispatcher.hpp"
-
-using namespace ED;
-
-/********************************************************
- * Anything 'less than' comparable can be an event type.
- */
-class MyEvent
+// Define a base class for objects that will publish events.
+class PublisherBase
 {
-public:
-	const int i;
-	MyEvent(int i) : i(i) {}
-	bool operator < ( const MyEvent & that ) const { return this->i < that.i; };
+protected:
+  static ED::EventPublicationManager globalPublisher;
 };
 
-/******************************************************************************
- * Class that will raise events should inherit from ED::EventDispatcher<SELF>
- */
-class MyEventDispatcher
-	:	public EventDispatcher<MyEventDispatcher>
+// Define a base class for objects that will subscribe to events.
+class SubscriberBase
 {
-
-public:
-
-	void RaiseSomeEvents() {
-
-		/*************************************************************
-		 * Anything 'less than' comparable can be raised as an event
-		 */
-		// some 'int' events.
-		RaiseEvent( 1 );
-		RaiseEvent( 2 );
-		RaiseEvent( 3 );
-		RaiseEvent( 4 );
-
-		// some 'float' events.
-		RaiseEvent( 100.5f );
-		RaiseEvent( 200.5f );
-		RaiseEvent( 300.5f );
-		RaiseEvent( 400.5f );
-
-		// our custom event type.
-		RaiseEvent( MyEvent(69) );
-		RaiseEvent( MyEvent(70) );
-		RaiseEvent( MyEvent(71) );
-		RaiseEvent( MyEvent(72) );
-	}
+protected:
+  static ED::EventSubscriptionManager globalSubscriber;
+  static ED::EventScheduleManager globalScheduler;	// The delivery of events can be suspended / resumed.
 };
 
-// A function can be an event handler.
-void FunctionThatHandlesIntegers( const int & i ) {
+// Instantiate the event manager, and distribute interfaces to static base members.
+static ED::Manager globalEventManager;
+ED::EventPublicationManager 	PublisherBase::globalPublisher 		= globalEventManager.PublicationInterface();
+ED::EventSubscriptionManager	SubscriberBase::globalSubscriber 	= globalEventManager.SubscriptionInterface();
+ED::EventScheduleManager	SubscriberBase::globalScheduler 	= globalEventManager.SchedulerInterface();
 
-	printf("%s %d\n",__FUNCTION__, i);
-}
+// Define some events.
+// Anything comparable with the '<' operator can be an event.
+enum EventType0 { EventA=1, EventB=2 };
+enum EventType1 { EventC=3, EventD=4 };
+enum EventType2 { EventE=5, EventF=6 };
 
-// A member function in a class can also be an event handler.
-class Class {
+// Define a class that will pulish some events.
+class MyPublisher : public PublisherBase
+{
 public:
-	void MemberFunctionThatHandlesMyEvents(const MyEvent & myEv ) {
+  
+  void Publish()
+  {
+    globalPublisher.PublishEvent(EventA);
+    globalPublisher.PublishEvent(EventB);
+    globalPublisher.PublishEvent(EventC);
+    globalPublisher.PublishEvent(EventD);
+    globalPublisher.PublishEvent(EventE);
+    globalPublisher.PublishEvent(EventF);
+  }
+};
 
-		printf("%s %d\n",__FUNCTION__, myEv.i);
-	}
-}  _class ;
+// Define a class that will subscribe to some events.
+class MySubscriber : public SubscriberBase
+{
+  ED::subscription_t subscriptionToEventType0;
+  ED::subscription_t subscriptionToEventType1;
+  ED::subscription_t subscriptionToEventType2;
+  
+public:
+  MySubscriber()
+  {
+    
+  }
+  
+  void SubscribeAll()
+  {
+    // Your object is un-subscribed from an event when the returned subscription goes out of scope, or is reset. 
+    //	' subscriptionToEventType0.reset() '
+    subscriptionToEventType0 = globalSubscriber.SubscribeEventTypeHandler<EventType0>( this, &MySubscriber::OnEventType0 );
+    subscriptionToEventType1 = globalSubscriber.SubscribeEventTypeHandler<EventType1>( this, &MySubscriber::OnEventType1 );
+    subscriptionToEventType2 = globalSubscriber.SubscribeEventTypeHandler<EventType2>( this, &MySubscriber::OnEventType2 );
+  }
+  
+  void QueueSome()
+  {
+    // Any events raised when they have been marked as queued in the scheduler are stored for later delivery.
+    //	The scheduler is a stack of states.
+    //	The event will queued is any level of the stack marks it as queued.
+    globalScheduler.Push();
+    globalScheduler.Queue<EventType0,EventType1>();
+  }
+  
+  void Unqueue()
+  {
+    // After 'possibly' allowing more events to be raised by calling globalScheduler.Pop() or globalScheduler.Publish<...>()
+    //	You need to call Flush() to re-process the queued events.
+    globalScheduler.Pop();
+    globalScheduler.FlushQueue();
+  }
+  
+  void OnEventType0( EventType0 event ) { printf("EventType0 ( %d )\n", event);  }
+  void OnEventType1( EventType1 event ) { printf("EventType1 ( %d )\n", event);  }
+  void OnEventType2( EventType2 event ) { printf("EventType2 ( %d )\n", event);  }
+};
 
-// A lambda event handler
-auto lambdaFloatEventHandler =
-		[] (const float &f) { printf("LambdaThatHandlesFloats %f\n", f); };
-
-
-int main() {
-
-	// This condition filter only raises events for EVEN integers.
-	auto isEven = [] (const int &i) -> bool { return !(i & 1); };
-
-	/*** Create an instance of our EventDispatcher ***/
-	auto myEventDispathcer = std::make_shared<MyEventDispatcher>()
-
-		/*** Register an event handler (c-function) for EVEN integers only ***/
-		->RegisterConditionalEventHandler<int>  ( &FunctionThatHandlesIntegers, isEven )
-
-		/*** Register an event handler (c++ member function) for a specific Event 'MyEvent(69)' ***/
-		->RegisterEventHandler        		    ( MyEvent(69), &_class, &Class::MemberFunctionThatHandlesMyEvents  )
-
-		/*** Register an event handler (lambda) for ALL floats ***/
-		->RegisterEventTypeHandler<float> 		( lambdaFloatEventHandler );
-
-
-	/*** Now, raise all out events ***/
-	myEventDispathcer->RaiseSomeEvents();
-
-	/***
-	 * OUTPUT:
-	 *		FunctionThatHandlesIntegers 2
-	 *		FunctionThatHandlesIntegers 4
-	 *		LambdaThatHandlesFloats 100.500000
-	 *		LambdaThatHandlesFloats 200.500000
-	 *		LambdaThatHandlesFloats 300.500000
-	 *		LambdaThatHandlesFloats 400.500000
-	 *		MemberFunctionThatHandlesMyEvents 69
-	 *
-	 *	Note that only even integer events were raised.
-	 *	All float events were raised.
-	 *	Of all the 'MyEvents' only 'MyEvent(69)' was raised.
-	 */
-
-	return 0;
+int main(int argc, char **argv) {
+  
+  MySubscriber subscriber;
+  MyPublisher publisher;
+  
+  subscriber.SubscribeAll();
+  subscriber.QueueSome();
+  publisher.Publish();
+  subscriber.Unqueue();
+  
+  // Events are raised in the order 1,2,3,4,5,6.
+  // But due to the actions of the scheduler, the program outputs 5,6,1,2,3,4.
+  
+  return 0;
 }
+
 

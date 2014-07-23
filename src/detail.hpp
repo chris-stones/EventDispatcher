@@ -31,6 +31,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <typeindex>
 #include <map>
 #include <vector>
+#include <deque>
 #include <functional>
 #include <algorithm>
 #include <memory>
@@ -45,6 +46,111 @@ namespace ED {
 
 	namespace detail {
 	  
+	  
+		class EventScheduler
+		{
+		 
+		public:
+		  
+		  // must be ordered from least, to most restrictive.
+		  enum schedule {
+		    SchedDeliver,		/* handler is called immediately. */
+		    SchedQueue,			/* event is stored for later. */
+//		    SchedDrop,			/* event is dropped. */
+		  };
+		  
+		  EventScheduler()
+		    :	deffaultSchedule(SchedDeliver)
+		  {}
+		  
+		  EventScheduler( const EventScheduler & that)
+		    :	deffaultSchedule(that.deffaultSchedule),
+			overrideDefault(that.overrideDefault)
+		  {}
+		  
+		private:
+		  
+		  schedule deffaultSchedule;
+		  
+		  std::map<std::type_index, schedule> overrideDefault;
+		  		  
+		public:
+		  
+		  void Reset(schedule s) {
+		    overrideDefault.clear();
+		    deffaultSchedule = s;
+		  }
+		  
+		  void DeliverAll() 	{ Reset( SchedDeliver ); }
+		  void QueueAll() 	{ Reset( SchedQueue ); }
+		  
+		  void Deliver		( const std::type_index & ti ) { 
+		    overrideDefault[ti] = SchedDeliver; 
+		  }
+		  void Queue		( const std::type_index & ti ) { 
+		    overrideDefault[ti] = SchedQueue;
+		  }
+		  
+		  template<typename _T> void Deliver	() { Deliver	(typeid(_T)); }
+		  template<typename _T> void Queue	() { Queue	(typeid(_T)); }
+		  
+		  schedule GetSchedule(const std::type_index & ti) const
+		  {
+		    auto itor = overrideDefault.find(ti);
+		    		    
+		    if(itor == overrideDefault.end()) {
+		      #if defined(DEBUG_EVENT_SCHED)
+		      printf("GetSchedule for %s -> default %d\n", ti.name(), deffaultSchedule);
+		      #endif
+		      return deffaultSchedule;
+		    }
+		    #if defined(DEBUG_EVENT_SCHED)
+		    printf("GetSchedule for %s -> set %d\n", ti.name(), itor->second);
+		    #endif
+		    return itor->second;
+		    
+		  }
+		  
+		  template<typename _T> schedule GetSchedule() const { 
+		    return GetSchedule( typeid(_T) ); 
+		  }
+		};
+	  
+		class EventSchedulerStack
+		{
+		  std::vector<EventScheduler> eventStack;
+		  
+		public:
+		  
+		  EventSchedulerStack()
+		    :	eventStack(1)
+		  {}
+		  
+		  EventScheduler::schedule GetSchedule(const std::type_index & ti) const {
+		    
+		    auto schedule = EventScheduler::SchedDeliver;
+		    
+		    for(auto itor = eventStack.begin(); itor != eventStack.end(); itor++)
+		    {
+		      auto s = itor->GetSchedule(ti);
+		      schedule = std::max( s, schedule );
+		    }
+		    
+		    return schedule;
+		  }
+		  
+		  template<typename _T> EventScheduler::schedule GetSchedule() const { 
+		    
+		    return GetSchedule( typeid(_T) ); 
+		  }
+		  
+		  void Push() { eventStack.push_back( EventScheduler() ); }
+		  void Pop()  { eventStack.pop_back(); }
+		  
+		  EventScheduler & GetScheduler() { return *eventStack.rbegin(); }
+		};
+		
+		
 		/**************************************************************************
 		 * Subscribing to an event returns an ISubscritpion.
 		 * 	Deleteing the subscription un-subscribes the event.
@@ -261,10 +367,12 @@ namespace ED {
 				return std::unique_ptr<ISubscritpion>( new ConditionalSubscription( functorVector, typeid(_EventType), cf ) );
 			}
 		};
-
+		
 		class EventDispatcher {
-
-			// General map...
+		  
+		public:
+		  
+		      // General map...
 			typedef std::vector<IFunctorWrapper*> 		FunctorVector;
 			typedef std::map<std::type_index, FunctorVector >  	GeneralMap;
 			GeneralMap generalMap;
@@ -273,24 +381,9 @@ namespace ED {
 			typedef std::map< std::type_index, IInstWrapper *> SpecialMap;
 			SpecialMap specificMap;
 			SpecialMap conditionalMap;
-
-		public:
-
-			virtual ~EventDispatcher() {
-
-				for( auto itor0 : specificMap )
-					delete itor0.second;
-
-				for( auto itor0 : conditionalMap )
-					delete itor0.second;
-
-				for( auto itor1 : generalMap)
-					for( auto itor2 : itor1.second )
-						delete itor2;
-			}
-
+			
 			template<typename _EventType>
-			void Raise( const _EventType & event ) {
+			void RaiseNow( const _EventType & event ) {
 
 				{
 					auto itor0 = conditionalMap.find( typeid(event) );
@@ -315,7 +408,20 @@ namespace ED {
 					}
 				}
 			}
+		  
+		  virtual ~EventDispatcher() {
 
+				for( auto itor0 : specificMap )
+					delete itor0.second;
+
+				for( auto itor0 : conditionalMap )
+					delete itor0.second;
+
+				for( auto itor1 : generalMap)
+					for( auto itor2 : itor1.second )
+						delete itor2;
+			}
+			
 			template<typename _EventType, typename _Handler, typename _Condition>
 			std::unique_ptr<detail::ISubscritpion> Register( const _Handler & handler, const _Condition & condition) {
 
@@ -385,6 +491,121 @@ namespace ED {
 				functorVector.push_back(functorWrapper);
 				
 				return std::unique_ptr<detail::ISubscritpion>( new GeneralSubscription<Function>(generalMap, typeid(_EventType), functorWrapper) );
+			}
+		  
+		};
+		
+		class IQueuedEvent {
+		public:
+		  virtual void RaiseNow(EventDispatcher &eventDispatcher) = 0;
+		  virtual bool IsType( const std::type_index & t ) const = 0;
+		  virtual std::type_index GetTypeIndex() const = 0;
+		};
+	
+		template<typename _T> 
+		class QueuedEvent
+		  :	public IQueuedEvent
+		{
+		  _T e;
+		public:
+		  QueuedEvent(const _T & e)
+		    :	e(e)
+		  {}
+		  virtual void RaiseNow(EventDispatcher &eventDispatcher) {
+		    
+		    eventDispatcher.RaiseNow(e);
+		  }
+		  
+		  virtual bool IsType( const std::type_index & t ) const {
+		   
+		    return t == typeid(e);
+		  }
+		  
+		  virtual std::type_index GetTypeIndex() const {
+		   
+		    return typeid(e);
+		  }
+		  
+		};
+
+		class ScheduledEventDispatcher 
+		  : public EventDispatcher
+		{
+		  
+		  EventSchedulerStack eventSchedulerStack;
+		  
+		  std::deque<std::unique_ptr<IQueuedEvent> > queue;
+		  
+		public:
+
+			template<typename _EventType>
+			void Raise( const _EventType & event ) {
+
+			  switch(eventSchedulerStack.GetSchedule<_EventType>() )
+			  {
+			    default:
+			      assert(0);
+			      break;
+			    case EventScheduler::SchedDeliver:
+			      RaiseNow(event);
+			      break;
+			      				
+			      case EventScheduler::SchedQueue:
+				queue.push_back( std::unique_ptr<IQueuedEvent>(new QueuedEvent<_EventType>(event) ) );
+				break;
+				
+//			      case EventScheduler::SchedDrop:
+//				break;
+			  }
+			}
+
+			// Deliver all deliverable messages.
+			void Flush()
+			{
+			  auto itor = queue.begin();
+			  while( itor != queue.end() )
+			  {
+			    if( eventSchedulerStack.GetSchedule( (*itor)->GetTypeIndex() ) == EventScheduler::SchedDeliver ) {
+			      
+			      (*itor)->RaiseNow( *this );
+			      itor = queue.erase( itor );
+			    }
+			    else
+			      ++itor;
+			  }
+			}
+			
+			void PushMask() {
+			  
+			  eventSchedulerStack.Push();
+			}
+			
+			void PopMask() {
+			 
+			  eventSchedulerStack.Pop();
+			}
+			
+			void DeliverAll() {
+			  eventSchedulerStack.GetScheduler().DeliverAll();
+			}
+			void QueueAll() {
+			  eventSchedulerStack.GetScheduler().QueueAll();
+			}
+		  
+			void Deliver	( const std::type_index & ti ) {
+			  eventSchedulerStack.GetScheduler().Deliver(ti);
+			}
+			
+			template<typename _T> void Queue() {
+			  eventSchedulerStack.GetScheduler().Queue<_T>();
+			}
+		  
+			void Queue	( const std::type_index & ti ) {
+			  eventSchedulerStack.GetScheduler().Queue(ti);
+			}
+		  
+			template<typename _T> void Deliver() {
+			  eventSchedulerStack.GetScheduler().Deliver<_T>();
 			}
 		};
 	}

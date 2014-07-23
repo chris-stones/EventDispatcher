@@ -38,9 +38,9 @@ typedef std::unique_ptr<ISubscritpion> subscription_t;
 class EventSubscriptionManager
 {
     friend class Manager;
-    detail::EventDispatcher &eventDispatcher;
+    detail::ScheduledEventDispatcher &eventDispatcher;
 
-    EventSubscriptionManager(detail::EventDispatcher &eventDispatcher)
+    EventSubscriptionManager(detail::ScheduledEventDispatcher &eventDispatcher)
         :	eventDispatcher(eventDispatcher)
     {}
 
@@ -110,13 +110,94 @@ public:
     }
 };
 
+class EventScheduleManager {
+  
+  friend class Manager;
+  
+  detail::ScheduledEventDispatcher &eventDispatcher;
+
+    EventScheduleManager(detail::ScheduledEventDispatcher &eventDispatcher)
+        :	eventDispatcher(eventDispatcher)
+    {}
+       
+public:
+  
+  void DeliverAll() {
+   
+    eventDispatcher.DeliverAll();
+  }
+  
+  void QueueAll() {
+   
+    eventDispatcher.QueueAll();
+  }
+  
+  void Push() {
+    eventDispatcher.PushMask();
+  }
+  
+  void Pop() {
+    eventDispatcher.PopMask();
+  }
+  
+  void FlushQueue() {
+  
+    eventDispatcher.Flush();
+  }
+  
+private:
+ 
+  template<typename _T, typename... Args>
+  struct Publish_ {
+    static void Publish(detail::ScheduledEventDispatcher &eventDispatcher) {
+      eventDispatcher.Deliver<_T>();
+      Publish_<Args...>::Publish(eventDispatcher);
+    }
+  };
+  
+  template<typename _T>
+  struct Publish_<_T> {
+    static void Publish(detail::ScheduledEventDispatcher &eventDispatcher) {
+      eventDispatcher.Deliver<_T>();
+    }
+  };
+  
+  template<typename _T, typename... Args>
+  struct Queue_ {
+    static void Queue(detail::ScheduledEventDispatcher &eventDispatcher) {
+      eventDispatcher.Queue<_T>();
+      Queue_<Args...>::Queue(eventDispatcher);
+    }
+  };
+  
+  template<typename _T>
+  struct Queue_<_T> {
+    static void Queue(detail::ScheduledEventDispatcher &eventDispatcher) {
+      eventDispatcher.Queue<_T>();
+    }
+  };
+  
+public:
+  
+  template<typename _T, typename... Args>
+  void Publish() {
+    Publish_<_T,Args...>::Publish(eventDispatcher);
+  }
+  
+  template<typename _T, typename... Args>
+  void Queue() {
+    Queue_<_T,Args...>::Queue(eventDispatcher);
+  }
+  
+};
+
 class EventPublicationManager  {
 
     friend class Manager;
 
-    detail::EventDispatcher &eventDispatcher;
+    detail::ScheduledEventDispatcher &eventDispatcher;
 
-    EventPublicationManager(detail::EventDispatcher &eventDispatcher)
+    EventPublicationManager(detail::ScheduledEventDispatcher &eventDispatcher)
         :	eventDispatcher(eventDispatcher)
     {}
 
@@ -127,11 +208,13 @@ public:
 
         eventDispatcher.Raise( event );
     }
+    
+    
 };
 
 class Manager
 {
-    detail::EventDispatcher eventDispatcher;
+    detail::ScheduledEventDispatcher eventDispatcher;
 
 public:
     EventSubscriptionManager SubscriptionInterface()
@@ -142,6 +225,11 @@ public:
     EventPublicationManager PublicationInterface()
     {
         return EventPublicationManager(eventDispatcher);
+    }
+    
+    EventScheduleManager SchedulerInterface()
+    {
+        return EventScheduleManager(eventDispatcher);
     }
 };
 }
