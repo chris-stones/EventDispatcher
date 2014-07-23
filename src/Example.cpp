@@ -1,5 +1,5 @@
 
-#include "EventDispatcher/EventDispatcher.hpp"
+#include "EventDispatcher.hpp"
 #include <stdio.h>
 
 
