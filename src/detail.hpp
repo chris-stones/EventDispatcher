@@ -497,6 +497,7 @@ namespace ED {
 		
 		class IQueuedEvent {
 		public:
+		  virtual ~IQueuedEvent(){}
 		  virtual void RaiseNow(EventDispatcher &eventDispatcher) = 0;
 		  virtual bool IsType( const std::type_index & t ) const = 0;
 		  virtual std::type_index GetTypeIndex() const = 0;
