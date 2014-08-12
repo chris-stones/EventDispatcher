@@ -458,8 +458,8 @@ namespace ED {
 			class GeneralSubscription : public ISubscritpion
 			{
 			  GeneralMap & generalMap;
-			  FunctorWrapper<_T> * functionWrapper;
 			  std::type_index ti;
+			  FunctorWrapper<_T> * functionWrapper;
 			public:
 			  GeneralSubscription(GeneralMap & generalMap, std::type_index ti, FunctorWrapper<_T> * functionWrapper)
 			    :	generalMap(generalMap),
