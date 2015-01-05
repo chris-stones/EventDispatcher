@@ -252,23 +252,27 @@ namespace ED {
 			template<typename _T>
 			class SpecificSubscription : public ISubscritpion
 			{
-			  FunctorLookup &functorLookup;
+			  std::weak_ptr<FunctorLookup> weakFunctorLookup;
 			  const _EventType event;
 			  FunctorWrapper<_T> * functionWrapper;
 			public:
-			  SpecificSubscription(FunctorLookup &functorLookup, const _EventType & event, FunctorWrapper<_T> * functionWrapper)
-			    :	functorLookup(functorLookup),
+			  SpecificSubscription(std::weak_ptr<FunctorLookup> weakFunctorLookup, const _EventType & event, FunctorWrapper<_T> * functionWrapper)
+			    :	weakFunctorLookup(weakFunctorLookup),
 				event(event),
 				functionWrapper(functionWrapper)
 			  {}
 			  virtual ~SpecificSubscription() {
 			    
-			    FunctorVector & functorVector = functorLookup[event];
-			    FunctorVector::iterator itor = std::find(functorVector.begin(), functorVector.end(), functionWrapper);
-			    if( itor != functorVector.end() ) {
-			      delete (*itor);
-			      functorVector.erase( itor );
-			    }
+                            std::shared_ptr<FunctorLookup> functorLookup = weakFunctorLookup.lock();
+
+                            if(functorLookup) {
+			      FunctorVector & functorVector = (*functorLookup)[event];
+			      FunctorVector::iterator itor = std::find(functorVector.begin(), functorVector.end(), functionWrapper);
+			      if( itor != functorVector.end() ) {
+			        delete (*itor);
+			        functorVector.erase( itor );
+			      }
+                            }
 			  }
 			};
 
@@ -328,23 +332,30 @@ namespace ED {
 			
 			class ConditionalSubscription : public ISubscritpion
 			{
-			  FunctorLookup & functorLookup;
+			  std::weak_ptr<FunctorLookup> weakFunctorLookup;
 			  ConditionalFunctor 	functionWrapper;
 			  std::type_index ti;
 			public:
-			  ConditionalSubscription(FunctorLookup & functorLookup, std::type_index ti, const ConditionalFunctor & functionWrapper)
-			    :	functorLookup(functorLookup),
+			  ConditionalSubscription(
+                            std::weak_ptr<FunctorLookup> weakFunctorLookup, 
+                            std::type_index ti, 
+                            const ConditionalFunctor & functionWrapper)
+			    :	weakFunctorLookup(weakFunctorLookup),
 				ti(ti),
 				functionWrapper(functionWrapper)
 			  {}
 			  virtual ~ConditionalSubscription() {
 			    
-			    FunctorVector & functorVector = functorLookup[ti];
-			    typename FunctorVector::iterator itor = std::find(functorVector.begin(), functorVector.end(), functionWrapper);
-			    if( itor != functorVector.end() ) {
-			      delete (*itor).second;
-			      functorVector.erase( itor );
-			    }
+			    std::shared_ptr<FunctorLookup> functorLookup = weakFunctorLookup.lock();
+		            
+                            if(functorLookup) {
+			      FunctorVector & functorVector = (*functorLookup)[ti];
+			      typename FunctorVector::iterator itor = std::find(functorVector.begin(), functorVector.end(), functionWrapper);
+			      if( itor != functorVector.end() ) {
+			        delete (*itor).second;
+			        functorVector.erase( itor );
+			      }
+                            }
 			  }
 			};
 
@@ -375,32 +386,39 @@ namespace ED {
 		      // General map...
 			typedef std::vector<IFunctorWrapper*> 		FunctorVector;
 			typedef std::map<std::type_index, FunctorVector >  	GeneralMap;
-			GeneralMap generalMap;
+			std::shared_ptr<GeneralMap> generalMap;
 
 			// Special maps... Maps requiring an extra level of indirection!
 			typedef std::map< std::type_index, IInstWrapper *> SpecialMap;
-			SpecialMap specificMap;
-			SpecialMap conditionalMap;
+			std::shared_ptr<SpecialMap> specificMap;
+			std::shared_ptr<SpecialMap> conditionalMap;
+
+			EventDispatcher() {
+
+                          generalMap = std::make_shared<GeneralMap>();
+                          specificMap = std::make_shared<SpecialMap>();
+                          conditionalMap = std::make_shared<SpecialMap>();
+                        }
 			
 			template<typename _EventType>
 			void RaiseNow( const _EventType & event ) {
 
 				{
-					auto itor0 = conditionalMap.find( typeid(event) );
-					if(itor0 != conditionalMap.end())
+					auto itor0 = conditionalMap->find( typeid(event) );
+					if(itor0 != conditionalMap->end())
 						itor0->second->GetInst<ConditionalEventHandlerLookup<_EventType>>().Raise( event );
 				}
 
 				{
-					auto itor0 = specificMap.find( typeid(event) );
-					if(itor0 != specificMap.end())
+					auto itor0 = specificMap->find( typeid(event) );
+					if(itor0 != specificMap->end())
 						itor0->second->GetInst<SpecificEventHandlerLookup<_EventType>>().Raise( event );
 				}
 
 				{
-					auto itor0 = generalMap.find( typeid(_EventType) );
+					auto itor0 = generalMap->find( typeid(_EventType) );
 
-					if(itor0 != generalMap.end()) {
+					if(itor0 != generalMap->end()) {
 
 						auto v = itor0->second;
 						for( auto wrapper : v )
@@ -411,13 +429,13 @@ namespace ED {
 		  
 		  virtual ~EventDispatcher() {
 
-				for( auto itor0 : specificMap )
+				for( auto itor0 : *specificMap )
 					delete itor0.second;
 
-				for( auto itor0 : conditionalMap )
+				for( auto itor0 : *conditionalMap )
 					delete itor0.second;
 
-				for( auto itor1 : generalMap)
+				for( auto itor1 : *generalMap)
 					for( auto itor2 : itor1.second )
 						delete itor2;
 			}
@@ -428,12 +446,12 @@ namespace ED {
 				typedef std::function<void(const _EventType &)> Function;
 				Function handler_function = handler;
 
-				auto itor0 = conditionalMap.find( typeid(_EventType) );
+				auto itor0 = conditionalMap->find( typeid(_EventType) );
 
-				if( itor0 == conditionalMap.end() ) {
-					conditionalMap[typeid(_EventType)] =
+				if( itor0 == conditionalMap->end() ) {
+					(*conditionalMap)[typeid(_EventType)] =
 						new InstWrapper<ConditionalEventHandlerLookup<_EventType>>( );
-					itor0 = conditionalMap.find( typeid(_EventType) );
+					itor0 = conditionalMap->find( typeid(_EventType) );
 				}
 				return itor0->second->GetInst<ConditionalEventHandlerLookup<_EventType>>().Register(handler_function, condition);
 			}
@@ -444,12 +462,12 @@ namespace ED {
 				typedef std::function<void(const _EventType &)> Function;
 				Function handler_function = handler;
 
-				auto itor0 = specificMap.find( typeid(_EventType) );
+				auto itor0 = specificMap->find( typeid(_EventType) );
 
-				if( itor0 == specificMap.end() ) {
-					specificMap[typeid(_EventType)] =
+				if( itor0 == specificMap->end() ) {
+					(*specificMap)[typeid(_EventType)] =
 						new InstWrapper<SpecificEventHandlerLookup<_EventType>>( );
-					itor0 = specificMap.find( typeid(_EventType) );
+					itor0 = specificMap->find( typeid(_EventType) );
 				}
 				return  itor0->second->GetInst<SpecificEventHandlerLookup<_EventType>>().Register(event, handler_function);
 			}
@@ -457,23 +475,26 @@ namespace ED {
 			template<typename _T>
 			class GeneralSubscription : public ISubscritpion
 			{
-			  GeneralMap & generalMap;
+			  std::weak_ptr<GeneralMap> weakGeneralMap;
 			  std::type_index ti;
 			  FunctorWrapper<_T> * functionWrapper;
 			public:
-			  GeneralSubscription(GeneralMap & generalMap, std::type_index ti, FunctorWrapper<_T> * functionWrapper)
-			    :	generalMap(generalMap),
+			  GeneralSubscription(std::weak_ptr<GeneralMap> weakGeneralMap, std::type_index ti, FunctorWrapper<_T> * functionWrapper)
+			    :	weakGeneralMap(weakGeneralMap),
 				ti(ti),
 				functionWrapper(functionWrapper)
 			  {}
 			  virtual ~GeneralSubscription() {
 			    
-			    FunctorVector &functorVector = generalMap[ti];
-			    FunctorVector::iterator itor = std::find(functorVector.begin(), functorVector.end(), functionWrapper);
-			    if( itor != functorVector.end() ) {
-			      delete (*itor);
-			      functorVector.erase( itor );
-			    }
+                            std::shared_ptr<GeneralMap> generalMap = weakGeneralMap.lock();
+                            if(generalMap) {
+			      FunctorVector &functorVector = (*generalMap)[ti];
+			      FunctorVector::iterator itor = std::find(functorVector.begin(), functorVector.end(), functionWrapper);
+			      if( itor != functorVector.end() ) {
+			        delete (*itor);
+			        functorVector.erase( itor );
+			      }
+                            }
 			  }
 			};
 
@@ -486,7 +507,7 @@ namespace ED {
 				
 				auto functorWrapper = new FunctorWrapper<Function>(handler_function);
 				
-				FunctorVector &functorVector = generalMap[typeid(_EventType)];
+				FunctorVector &functorVector = (*generalMap)[typeid(_EventType)];
 
 				functorVector.push_back(functorWrapper);
 				
