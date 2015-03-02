@@ -1,236 +1,57 @@
-/****************************************************************************************
-Copyright (c) 2014, Chris Stones ( chris.stones_AT_gmail.com / chris.stones_AT_zoho.com
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
 
 #pragma once
 
-#include "detail.hpp"
+#include "DirectDispatcher.hpp"
+#include "BlockableDispatcher.hpp"
+#include "PipedDispatcher.hpp"
+#include "ScopedBlock.hpp"
 
-namespace ED
-{
-class Manager;
+namespace EventDispatcher {
 
-typedef detail::ISubscritpion ISubscritpion;
-typedef std::unique_ptr<ISubscritpion> subscription_t;
+	/***
+	 * When you subscribe to an event, you are issued an std::unique_ptr<ISubscription>
+	 * The event handler is un-subscribed when the unique_ptr is reset, or goes out of scope.
+	 */
+	using detail::ISubscription;
 
+	/***
+	 * The direct dispatcher calls raised events handlers immediately.
+	 * If multiple handlers are subscribed to an event, they are called in the order they were subscribed.
+	 * This dispatcher is NOT 'Blockable'.
+	 */
+	using detail::DirectDispatcher;
 
-class EventSubscriptionManager
-{
-    friend class Manager;
-    detail::ScheduledEventDispatcher &eventDispatcher;
+	/***
+	 * The piped dispatcher queues all events.
+	 * Handlers are called when 'Flush' is called.
+	 * Handlers are called in the order the corresponding events are raised.
+	 * If multiple handlers are subscribed to an event, they are called in the order they were described.
+	 * This Dispatcher is 'Blockable'.
+	 */
+	using detail::PipedDispatcher;
 
-    EventSubscriptionManager(detail::ScheduledEventDispatcher &eventDispatcher)
-        :	eventDispatcher(eventDispatcher)
-    {}
+	/***
+	 * The blockable dispatcher may call handlers immediately, or queue them for later.
+	 * Handlers are called in the order the corresponding events are raised.
+	 * If multiple handlers are subscribed to an event, they are called in the order they were described.
+	 * If this dispatcher is not in a blocked state, and no previously events are pending when an event is raised, then the handler is called immediately.
+	 * If the dispatcher is blocked when an event is raised, it is queued for delivery when the state becomes unblocked.
+	 * If the dispatcher is not in a blocked state, but previously raised events are pending, then the event is pushed to the back of the pending queue.
+	 * 	This is possible if an event handler itself raises an event.
+	 * 	IF none of the pending events before this event cause the dispatcher to become blocked, then queued event handler will run immediately.
+	 * 	IF a previously raised pending event handler blocks the dispatcher, then this events handler will be called when the dispatcher becomes unblocked.
+	 */
+	using detail::BlockableDispatcher;
 
-public:
-
-    ////////////////////////////////////// SUBSCRIBE TO EVENTS MEETING A GIVEN CONDITION //////////////////////////////////
-    // Foe example, subscribe to all integer events with an even value
-    template<typename _EventType, typename _Handler, typename _Condition>
-    std::unique_ptr<ISubscritpion>
-    SubscribeConditionalEventHandler( const _Handler & handler, const _Condition & condition ) {
-
-        return eventDispatcher.Register<_EventType>( handler, condition );
-    }
-
-    template<typename _EventType, typename _Thiz, typename _MFunc, typename _Condition>
-    std::unique_ptr<ISubscritpion>
-    SubscribeConditionalEventHandler( const _Thiz & thiz, const _MFunc & memb, const _Condition & condition ) {
-
-        return SubscribeConditionalEventHandler<_EventType>(
-            std::bind( memb, thiz, std::placeholders::_1 ),
-            condition);
-    }
-
-    template<typename _EventType, typename _Thiz, typename _MFunc, typename _CThiz, typename _CMFunc >
-    std::unique_ptr<ISubscritpion>
-    SubscribeConditionalEventHandler( const _Thiz & thiz, const _MFunc & memb, const _CThiz & cthiz, const _CMFunc & cmemb ) {
-
-        return SubscribeConditionalEventHandler<_EventType>(
-            std::bind(  memb,  thiz, std::placeholders::_1 ),
-            std::bind( cmemb, cthiz, std::placeholders::_1 ));
-    }
-    
-    ////////////////////////////////////////// SUBSCRIBE TO EVENTS BY TYPE ////////////////////////////////////////////////
-    // For example, Subscribe to integer events.
-    template<typename _EventType, typename _Handler>
-    std::unique_ptr<ISubscritpion>
-    SubscribeEventTypeHandler( const _Handler & handler ) {
-
-        return eventDispatcher.Register<_EventType>( handler );
-    }
-
-    template<typename _EventType, typename _Thiz, typename _MFunc>
-    std::unique_ptr<ISubscritpion>
-    SubscribeEventTypeHandler( const _Thiz & thiz, const _MFunc & memb ) {
-
-        return SubscribeEventTypeHandler<_EventType>(
-            std::bind( memb, thiz, std::placeholders::_1 ) );
-    }
-
-
-    ////////////////////////////////////////// SUBSCRIBE TO EVENTS BY TYPE VALUE ////////////////////////////////////////////
-    // For example, Subscribe to integer events with value 101;
-    template<typename _EventType, typename _Handler>
-    std::unique_ptr<ISubscritpion>
-    SubscribeEventHandler( const _EventType & event, const _Handler & handler ) {
-
-        return eventDispatcher.Register( event, handler );
-    }
-
-    template<typename _EventType, typename _Thiz, typename _MFunc>
-    std::unique_ptr<ISubscritpion>
-    SubscribeEventHandler( const _EventType & event, const _Thiz & thiz, const _MFunc & memb ) {
-
-        return SubscribeEventHandler(
-            event,
-            std::bind( memb, thiz, std::placeholders::_1 ) );
-    }
-};
-
-class EventScheduleManager {
-  
-  friend class Manager;
-  
-  detail::ScheduledEventDispatcher &eventDispatcher;
-
-    EventScheduleManager(detail::ScheduledEventDispatcher &eventDispatcher)
-        :	eventDispatcher(eventDispatcher)
-    {}
-       
-public:
-  
-  void DeliverAll() {
-   
-    eventDispatcher.DeliverAll();
-  }
-  
-  void QueueAll() {
-   
-    eventDispatcher.QueueAll();
-  }
-  
-  void Push() {
-    eventDispatcher.PushMask();
-  }
-  
-  void Pop() {
-    eventDispatcher.PopMask();
-  }
-  
-  void FlushQueue() {
-  
-    eventDispatcher.Flush();
-  }
-  
-private:
- 
-  template<typename _T, typename... Args>
-  struct Publish_ {
-    static void Publish(detail::ScheduledEventDispatcher &eventDispatcher) {
-      eventDispatcher.Deliver<_T>();
-      Publish_<Args...>::Publish(eventDispatcher);
-    }
-  };
-  
-  template<typename _T>
-  struct Publish_<_T> {
-    static void Publish(detail::ScheduledEventDispatcher &eventDispatcher) {
-      eventDispatcher.Deliver<_T>();
-    }
-  };
-  
-  template<typename _T, typename... Args>
-  struct Queue_ {
-    static void Queue(detail::ScheduledEventDispatcher &eventDispatcher) {
-      eventDispatcher.Queue<_T>();
-      Queue_<Args...>::Queue(eventDispatcher);
-    }
-  };
-  
-  template<typename _T>
-  struct Queue_<_T> {
-    static void Queue(detail::ScheduledEventDispatcher &eventDispatcher) {
-      eventDispatcher.Queue<_T>();
-    }
-  };
-  
-public:
-  
-  template<typename _T, typename... Args>
-  void Publish() {
-    Publish_<_T,Args...>::Publish(eventDispatcher);
-  }
-  
-  template<typename _T, typename... Args>
-  void Queue() {
-    Queue_<_T,Args...>::Queue(eventDispatcher);
-  }
-  
-};
-
-class EventPublicationManager  {
-
-    friend class Manager;
-
-    detail::ScheduledEventDispatcher &eventDispatcher;
-
-    EventPublicationManager(detail::ScheduledEventDispatcher &eventDispatcher)
-        :	eventDispatcher(eventDispatcher)
-    {}
-
-public:
-
-    template<typename _EventType>
-    void PublishEvent( const _EventType & event ) {
-
-        eventDispatcher.Raise( event );
-    }
-    
-    
-};
-
-class Manager
-{
-    detail::ScheduledEventDispatcher eventDispatcher;
-
-public:
-    EventSubscriptionManager SubscriptionInterface()
-    {
-        return EventSubscriptionManager(eventDispatcher);
-    }
-
-    EventPublicationManager PublicationInterface()
-    {
-        return EventPublicationManager(eventDispatcher);
-    }
-    
-    EventScheduleManager SchedulerInterface()
-    {
-        return EventScheduleManager(eventDispatcher);
-    }
-};
+	/***
+	 * PipedDispatcher and BlockableDispatcher is 'Blockable'.
+	 * The dispatcher is blocked with a call to Block().
+	 * Each block must be matched by a matching Unblock().
+	 * Blocks are nested. if Block is called 3 times, 3 Unblocks are required to put the dispatcher into an unblocked state.
+	 * For Safety, ScopedBlock is provided.
+	 * ScopedBlock blocks a blockable dispatcher, and unblocks it when it is destroyed, or goes out of scope.
+	 * Scoped block can handle dispatcher objects, pointers to dispatcher objects, or std::shared_ptr's to dispatcher objects.
+	 */
+	using detail::ScopedBlock;
 }
 
